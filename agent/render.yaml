@@ -1,0 +1,33 @@
+# Render deploy for the LOOP agent. Set the secret env vars in the dashboard.
+services:
+  - type: web
+    name: loop-agent
+    runtime: python
+    plan: starter
+    pythonVersion: "3.12"
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /
+    envVars:
+      - key: SPLUNK_MCP_URL
+        sync: false
+      - key: SPLUNK_MCP_TOKEN
+        sync: false
+      - key: HOSTED_MODEL_URL
+        sync: false
+      - key: HOSTED_MODEL_KEY
+        sync: false
+      - key: HOSTED_MODEL_NAME
+        value: foundation-sec-8b
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_KEY
+        sync: false
+      - key: LOOP_CORS_ORIGINS
+        sync: false
+      - key: LOOP_ALLOW_STUBS
+        value: "0"
