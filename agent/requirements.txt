@@ -1,0 +1,19 @@
+# LOOP agent — FastAPI brain
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+pydantic==2.10.4
+pydantic-settings==2.7.1
+python-dotenv==1.0.1
+httpx==0.28.1
+
+# MCP client (streamable-HTTP transport to the Splunk MCP Server)
+mcp==1.2.0
+
+# Supabase (state + realtime + pgvector)
+supabase==2.11.0
+
+# Hosted-model layer (OpenAI-compatible client for Foundation-Sec-8B)
+openai==1.59.6
+
+# Local embeddings for incident-signature memory (swappable)
+sentence-transformers==3.3.1

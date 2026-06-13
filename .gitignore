@@ -1,0 +1,17 @@
+# OS
+.DS_Store
+
+# Python (agent/)
+agent/.venv/
+**/__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+
+# Node / Next (web/ has its own .gitignore too)
+node_modules/
+.next/
