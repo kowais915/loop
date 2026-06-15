@@ -15,6 +15,13 @@ class Settings(BaseSettings):
     # Splunk MCP Server
     splunk_mcp_url: str = ""
     splunk_mcp_token: str = ""
+    # Local Splunk Enterprise serves 8089 with a self-signed cert — set 0 to
+    # skip TLS verification for localhost. Keep 1 for real/Cloud endpoints.
+    splunk_verify_tls: bool = True
+
+    # Splunk HEC — only used by the seed loader (agent/seed/load_seed.py).
+    splunk_hec_url: str = "https://localhost:8088/services/collector/event"
+    splunk_hec_token: str = ""
 
     # Splunk Hosted Models (Foundation-Sec-8B, OpenAI-compatible)
     hosted_model_url: str = ""

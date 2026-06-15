@@ -8,6 +8,8 @@ export interface StageMeta {
   tw: string; // tailwind text color
 }
 
+// The orb is the one colorful element — each stage has its own hue. (The rest of
+// the app stays restrained zinc + emerald.)
 export const STAGE_META: Record<RingStage, StageMeta> = {
   detect: {
     key: "detect",

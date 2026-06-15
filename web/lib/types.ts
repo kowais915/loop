@@ -43,7 +43,10 @@ export interface StepContent {
   used_stub?: boolean;
   // flags
   anomaly?: boolean;
+  held?: boolean;
+  no_data?: boolean;
   cross_domain?: boolean;
+  splunk_ai?: boolean;
   gate?: boolean;
   matched?: boolean;
   learned?: boolean;

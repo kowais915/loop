@@ -22,9 +22,11 @@ function useLiveSeconds(incident: Incident | null): number {
 export function MttrCounter({
   incident,
   incidents,
+  bare = false,
 }: {
   incident: Incident | null;
   incidents: Incident[];
+  bare?: boolean;
 }) {
   const seconds = useLiveSeconds(incident);
   const running = incident && incident.mttr_seconds == null && incident.stage !== "rejected";
@@ -40,22 +42,22 @@ export function MttrCounter({
       : null;
 
   return (
-    <div className="glass rounded-2xl p-4">
+    <div className={bare ? "" : "glass rounded-2xl p-4"}>
       <div className="flex items-center gap-2">
-        <Timer className="h-4 w-4 text-cyan-400" />
+        <Timer className="h-4 w-4 text-zinc-400" />
         <h3 className="text-sm font-semibold text-zinc-200">Time to resolution</h3>
       </div>
       <div className="mt-2 flex items-baseline gap-2">
         <motion.span
           key={seconds}
           className={`font-mono text-4xl font-bold tabular-nums ${
-            running ? "text-cyan-300" : "text-emerald-300"
+            running ? "text-zinc-100" : "text-emerald-300"
           }`}
         >
           {seconds}s
         </motion.span>
         {running && (
-          <span className="animate-pulse-ring text-[11px] text-cyan-400/70">
+          <span className="animate-pulse-ring text-[11px] text-zinc-500">
             live
           </span>
         )}
@@ -64,7 +66,7 @@ export function MttrCounter({
         <motion.div
           initial={{ opacity: 0, y: 4 }}
           animate={{ opacity: 1, y: 0 }}
-          className="mt-2 inline-flex items-center gap-1 rounded-full bg-pink-500/15 px-2.5 py-1 text-[11px] font-medium text-pink-200"
+          className="mt-2 inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-2.5 py-1 text-[11px] font-medium text-emerald-200"
         >
           <Zap className="h-3 w-3" />
           {drop}% faster — known pattern, one-click approval
@@ -77,18 +79,31 @@ export function MttrCounter({
 export function MemoryShelf({
   incidents,
   currentId,
+  bare = false,
 }: {
   incidents: Incident[];
   currentId: string | null;
+  bare?: boolean;
 }) {
   const current = incidents.find((i) => i.id === currentId) ?? null;
   // Resolved incidents are the ones that contributed a learned signature.
   const learned = incidents.filter((i) => i.stage === "resolved");
+  // Always keep a matched signature visible, then fill with the most recent.
+  const MAX_SHOWN = 6;
+  const matchedId = current?.matched_incident_id ?? null;
+  const ordered = matchedId
+    ? [
+        ...learned.filter((i) => i.id === matchedId),
+        ...learned.filter((i) => i.id !== matchedId),
+      ]
+    : learned;
+  const shown = ordered.slice(0, MAX_SHOWN);
+  const moreCount = learned.length - shown.length;
 
   return (
-    <div className="glass rounded-2xl p-4">
+    <div className={bare ? "" : "glass rounded-2xl p-4"}>
       <div className="flex items-center gap-2">
-        <BrainCircuit className="h-4 w-4 text-pink-400" />
+        <BrainCircuit className="h-4 w-4 text-zinc-400" />
         <h3 className="text-sm font-semibold text-zinc-200">Incident memory</h3>
         <span className="ml-auto text-[11px] text-zinc-500">
           {learned.length} learned
@@ -99,7 +114,7 @@ export function MemoryShelf({
         <motion.div
           initial={{ opacity: 0, scale: 0.96 }}
           animate={{ opacity: 1, scale: 1 }}
-          className="mt-2 flex items-center gap-1.5 rounded-lg border border-pink-400/30 bg-pink-500/10 px-2.5 py-1.5 text-[12px] text-pink-200"
+          className="mt-2 flex items-center gap-1.5 rounded-lg border border-emerald-400/30 bg-emerald-500/10 px-2.5 py-1.5 text-[12px] text-emerald-200"
         >
           <Zap className="h-3.5 w-3.5" />
           Matched a prior incident — fix recalled from memory
@@ -112,13 +127,13 @@ export function MemoryShelf({
             No signatures yet. Resolve an incident to teach LOOP.
           </p>
         )}
-        {learned.map((i) => (
+        {shown.map((i) => (
           <div
             key={i.id}
-            className={`rounded-lg border px-3 py-2 ${
+            className={`rounded-lg px-3 py-2 ${
               i.id === current?.matched_incident_id
-                ? "border-pink-400/40 bg-pink-500/10"
-                : "border-zinc-800 bg-zinc-900/40"
+                ? "bg-emerald-500/10 ring-1 ring-emerald-400/40"
+                : "subtle"
             }`}
           >
             <div className="flex items-center justify-between">
@@ -136,6 +151,11 @@ export function MemoryShelf({
             </div>
           </div>
         ))}
+        {moreCount > 0 && (
+          <p className="pt-0.5 text-center text-[11px] text-zinc-600">
+            +{moreCount} more learned
+          </p>
+        )}
       </div>
     </div>
   );

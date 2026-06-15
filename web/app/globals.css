@@ -19,40 +19,57 @@ body {
   font-family: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
 }
 
-/* Ambient backdrop: faint radial glows on a near-black canvas. */
+/* Ambient backdrop: soft emerald/teal glows on a near-black canvas (1–2 colors). */
 body {
   background-image:
-    radial-gradient(60rem 60rem at 15% -10%, rgba(56, 189, 248, 0.08), transparent 60%),
-    radial-gradient(50rem 50rem at 95% 0%, rgba(168, 85, 247, 0.07), transparent 55%),
-    radial-gradient(40rem 40rem at 50% 120%, rgba(16, 185, 129, 0.06), transparent 55%);
+    radial-gradient(72rem 72rem at 12% -15%, rgba(16, 185, 129, 0.1), transparent 60%),
+    radial-gradient(58rem 58rem at 96% 112%, rgba(45, 212, 191, 0.07), transparent 55%);
   background-attachment: fixed;
 }
 
-/* Restrained glassmorphism. */
+/* Immersive panels — NO borders. Depth comes from a faint inset highlight and a
+   soft drop shadow, so content floats on the canvas instead of sitting in boxes. */
 .glass {
-  background: rgba(24, 24, 27, 0.55);
-  backdrop-filter: blur(14px) saturate(120%);
-  -webkit-backdrop-filter: blur(14px) saturate(120%);
-  border: 1px solid rgba(63, 63, 70, 0.6);
+  background: rgba(24, 24, 27, 0.4);
+  backdrop-filter: blur(16px) saturate(115%);
+  -webkit-backdrop-filter: blur(16px) saturate(115%);
+  box-shadow:
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.035),
+    0 12px 40px -16px rgba(0, 0, 0, 0.55);
 }
 
 .glass-strong {
-  background: rgba(24, 24, 27, 0.8);
-  backdrop-filter: blur(20px) saturate(130%);
-  -webkit-backdrop-filter: blur(20px) saturate(130%);
-  border: 1px solid rgba(82, 82, 91, 0.7);
+  background: rgba(24, 24, 27, 0.72);
+  backdrop-filter: blur(22px) saturate(120%);
+  -webkit-backdrop-filter: blur(22px) saturate(120%);
+  box-shadow:
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.05),
+    0 18px 50px -12px rgba(0, 0, 0, 0.65);
+}
+
+/* Soft, borderless sub-surface used inside panels (replaces bordered rows). */
+.subtle {
+  background: rgba(255, 255, 255, 0.03);
 }
 
 ::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 7px;
+  height: 7px;
 }
 ::-webkit-scrollbar-thumb {
-  background: rgba(82, 82, 91, 0.5);
+  background: rgba(82, 82, 91, 0.45);
   border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(16, 185, 129, 0.55); /* emerald on hover */
 }
 ::-webkit-scrollbar-track {
   background: transparent;
+}
+/* Firefox */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(82, 82, 91, 0.45) transparent;
 }
 
 @keyframes pulse-ring {
@@ -70,4 +87,27 @@ body {
 
 .font-mono {
   font-family: var(--font-geist-mono), ui-monospace, monospace;
+}
+
+/* Shimmering text — signals an in-progress stage. */
+@keyframes shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+.shimmer-text {
+  background: linear-gradient(
+    90deg,
+    rgba(113, 113, 122, 0.7) 0%,
+    rgba(228, 228, 231, 1) 50%,
+    rgba(113, 113, 122, 0.7) 100%
+  );
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: shimmer 1.8s linear infinite;
 }

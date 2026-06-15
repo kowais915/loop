@@ -6,7 +6,8 @@ Two swappable concerns behind small interfaces:
      drafting. The primary impl, FoundationSecClient, calls the Splunk Hosted
      Model (Foundation-Sec-8B) over an OpenAI-compatible endpoint. An Anthropic
      orchestrator fallback and a deterministic offline stub are also provided.
-     SplunkAIAssistantClient is stubbed for generate_spl if the token lands.
+     (Splunk AI Assistant generate_spl / ask_splunk_question are called directly
+     via the MCP client in mcp_client.py when the AI Assistant app is installed.)
 
   2. Embedder — turns an incident signature into a 384-dim vector for the
      pgvector memory store. Prefers a local sentence-transformer; falls back to
@@ -97,19 +98,6 @@ class StubModelClient:
         return json.dumps({"note": "stub-model", "echo": prompt[:200]})
 
 
-class SplunkAIAssistantClient:
-    """TODO: wire Splunk AI Assistant `generate_spl` once an activation token
-    arrives. Kept as a swappable seam so the rest of the system is unchanged."""
-
-    name = "splunk-ai-assistant"
-
-    def __init__(self, settings: Settings) -> None:
-        self.settings = settings
-
-    async def generate_spl(self, natural_language: str) -> str:  # pragma: no cover
-        raise NotImplementedError("Splunk AI Assistant generate_spl not yet enabled")
-
-
 def get_model_client(settings: Settings | None = None) -> ModelClient:
     settings = settings or get_settings()
     if settings.has_hosted_model:
@@ -132,16 +120,25 @@ class Embedder(Protocol):
 
 
 class SentenceTransformerEmbedder:
-    """Local 384-dim embeddings (all-MiniLM-L6-v2)."""
+    """Local 384-dim embeddings (all-MiniLM-L6-v2).
+
+    The model (~90MB + torch) is loaded LAZILY on first embed() so it never
+    blocks server startup."""
 
     name = "all-MiniLM-L6-v2"
 
     def __init__(self) -> None:
-        from sentence_transformers import SentenceTransformer
+        self._model = None
 
-        self._model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+    def _ensure_model(self) -> None:
+        if self._model is None:
+            from sentence_transformers import SentenceTransformer
+
+            logger.info("Loading embedding model %s (first use)…", self.name)
+            self._model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
 
     def embed(self, text: str) -> list[float]:
+        self._ensure_model()
         vec = self._model.encode([text], normalize_embeddings=True)[0]
         return [float(x) for x in vec]
 
@@ -170,13 +167,15 @@ class HashingEmbedder:
 
 
 def get_embedder() -> Embedder:
-    try:
-        emb = SentenceTransformerEmbedder()
-        logger.info("Embedder: %s", emb.name)
-        return emb
-    except Exception as exc:  # heavy wheels may be unavailable (e.g. py3.14)
-        logger.warning("sentence-transformers unavailable (%s); using hashing fallback", exc)
-        return HashingEmbedder()
+    # Cheap availability check — does NOT import or load the model (that happens
+    # lazily on first embed, so server startup stays fast).
+    import importlib.util
+
+    if importlib.util.find_spec("sentence_transformers") is not None:
+        logger.info("Embedder: all-MiniLM-L6-v2 (lazy load on first use)")
+        return SentenceTransformerEmbedder()
+    logger.warning("sentence-transformers not installed; using hashing fallback")
+    return HashingEmbedder()
 
 
 def _normalize(text: str) -> str:
@@ -279,14 +278,15 @@ def _diagnose_fallback(evidence: dict[str, Any]) -> dict[str, Any]:
     peak = max((_num(r.get("p95_latency_ms")) for r in latency), default=0)
     baseline = min((_num(r.get("p95_latency_ms")) for r in latency), default=0)
 
-    build = deploy.get("build", "unknown") if deploy else "unknown"
-    table = spans.get("table", "the affected table") if spans else "the affected table"
+    build = (deploy.get("build") or deploy.get("version") or deploy.get("release")
+             or deploy.get("commit") or "") if deploy else ""
+    table = (spans.get("table") if spans else "") or ""
     span_count = spans.get("span_count") if spans else None
 
     ev: list[str] = []
     if peak:
         ev.append(f"p95 spiked to {int(peak)}ms (baseline ~{int(baseline)}ms)")
-    if deploy:
+    if build:
         ev.append(f"deploy {build} immediately precedes the onset")
     if span_count:
         ev.append(f"{span_count} per-line-item db.query spans on {table} (N+1)")
@@ -298,18 +298,50 @@ def _diagnose_fallback(evidence: dict[str, Any]) -> dict[str, Any]:
     if healthy:
         ev.append("red herrings ruled out: " + ", ".join(healthy))
 
-    root = (
-        f"Deploy {build} introduced an N+1 query pattern on {table}, "
-        f"driving checkout p95 from ~{int(baseline)}ms to ~{int(peak)}ms."
-    )
-    return {"root_cause": root, "confidence": 0.93, "evidence": ev}
+    # Build the most specific honest statement the evidence supports.
+    if build and table:
+        root = (
+            f"Deploy {build} introduced an N+1 query pattern on {table}, "
+            f"driving p95 from ~{int(baseline)}ms to ~{int(peak)}ms."
+        )
+    elif build:
+        root = (
+            f"Deploy {build} correlates with the latency regression — "
+            f"p95 rose from ~{int(baseline)}ms to ~{int(peak)}ms right after it shipped."
+        )
+    else:
+        root = (
+            f"Latency regression: p95 rose from ~{int(baseline)}ms to ~{int(peak)}ms. "
+            f"No deployment correlated in this window — investigate recent config/changes."
+        )
+    return {"root_cause": root, "confidence": 0.9 if build else 0.6, "evidence": ev}
 
 
 def _remediation_fallback(context: dict[str, Any]) -> dict[str, Any]:
-    table = context.get("table", "cart_items")
-    build = context.get("build", "v2.4.1")
-    prev = context.get("previous_build", "v2.4.0")
-    service = context.get("service", "checkout")
+    table = context.get("table") or ""
+    build = context.get("build") or ""
+    prev = context.get("previous_build") or "the previous build"
+    service = context.get("service") or "the service"
+
+    # No N+1 table → propose a rollback-first remediation with NO misleading diff.
+    if not table:
+        if build:
+            remediation = (
+                f"Roll back {service} {build} → {prev} to restore baseline latency. "
+                f"The deploy correlates with the onset; revert first, then root-cause the "
+                f"regression in that change before re-deploying."
+            )
+            rollback = f"Roll back {service} {build} → {prev}"
+        else:
+            remediation = (
+                f"No deploy correlated with the onset. Recommend reverting the most recent "
+                f"change to {service} and reviewing recent config/feature-flag changes; "
+                f"hold the SLA alert until p95 returns to baseline."
+            )
+            rollback = f"Review & revert the most recent change to {service}"
+        return {"remediation": remediation, "diff": "", "rollback": rollback}
+
+    # N+1 found → propose the concrete batched-query fix.
     singular = table.rstrip("s")
     diff = f"""--- a/services/{service}/repository.py
 +++ b/services/{service}/repository.py

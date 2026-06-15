@@ -33,7 +33,13 @@ const H = 120;
 const PAD = 8;
 const BASELINE = 300; // SLA-ish reference line
 
-export function LatencySparkline({ steps }: { steps: AgentStep[] }) {
+export function LatencySparkline({
+  steps,
+  service,
+}: {
+  steps: AgentStep[];
+  service?: string;
+}) {
   const pts = extract(steps);
   if (pts.length < 2) return null;
 
@@ -56,7 +62,7 @@ export function LatencySparkline({ steps }: { steps: AgentStep[] }) {
       <div className="flex items-center gap-2">
         <TrendingDown className="h-4 w-4 text-emerald-400" />
         <h3 className="text-sm font-semibold text-zinc-200">
-          checkout p95 latency
+          {service ?? "service"} p95 latency
         </h3>
         <div className="ml-auto flex items-center gap-3 text-[11px]">
           <span className="text-red-300">peak {Math.round(peak)}ms</span>

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import logging
 import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
@@ -39,6 +40,21 @@ logger = logging.getLogger("loop.engine")
 MEMORY_MATCH_THRESHOLD = 0.55
 
 
+@dataclass
+class IncidentConfig:
+    """What/where to analyze. Defaults reproduce the curated demo; the
+    'Analyze a service' form overrides them to run on any data."""
+
+    service: str = ""
+    index: str = "ecommerce"
+    sourcetype: str = "checkout:transaction"
+    latency_field: str = "latency_ms"
+    deploy_sourcetype: str = "deployment:event"
+    earliest: str = ""
+    latest: str = ""
+    curated: bool = True  # run demo-specific red-herring + N+1 span checks
+
+
 class LoopEngine:
     def __init__(
         self,
@@ -51,6 +67,13 @@ class LoopEngine:
         self.mcp = mcp
         self.model = model
         self.embedder = embedder
+        self._configs: dict[str, IncidentConfig] = {}
+
+    def register_config(self, incident_id: str, config: IncidentConfig) -> None:
+        self._configs[incident_id] = config
+
+    def _config(self, incident_id: str, service: str) -> IncidentConfig:
+        return self._configs.get(incident_id) or IncidentConfig(service=service)
 
     # -- step helpers --------------------------------------------------------
     async def _think(self, iid: str, stage: str, text: str, **extra: Any) -> None:
@@ -92,30 +115,87 @@ class LoopEngine:
             if not incident:
                 return
             service = incident["service"]
-            windows = self._windows(service)
+            cfg = self._config(iid, service)
+            svc = f"service={service} " if service else ""
 
             # ---------- DETECT ----------
             await self._set_stage(iid, "detect")
             await self._think(iid, "detect",
-                f"Establishing whether {service} latency is anomalous and pinning the onset minute.")
-            e0, l0 = windows["detect"]
+                f"Establishing whether {service or cfg.sourcetype} latency is anomalous and pinning the onset minute.")
+            if cfg.earliest and cfg.latest:
+                e0, l0 = cfg.earliest, cfg.latest
+            else:
+                e0, l0 = self._windows(service)["detect"]
             detect_q = (
-                f"index=ecommerce sourcetype=checkout:transaction service={service} "
-                f"| timechart span=1m p95(latency_ms) as p95_latency_ms"
+                f"index={cfg.index} sourcetype={cfg.sourcetype} {svc}"
+                f"| timechart span=1m p95({cfg.latency_field}) as p95_latency_ms"
             )
             latency = await self.mcp.run_spl(detect_q, e0, l0)
             await self._spl(iid, "detect", "p95 latency by minute", latency)
 
             peak, baseline, onset = _latency_shape(latency.rows)
+            has_data = any(
+                r.get("p95_latency_ms") not in (None, "") for r in latency.rows
+            )
+            if not has_data:
+                await self._think(iid, "detect",
+                    f"No latency data found for sourcetype={cfg.sourcetype} "
+                    f"field={cfg.latency_field} in this window. Check the "
+                    f"index/sourcetype/field and time range.",
+                    anomaly=False, held=True, no_data=True)
+                await self._set_stage(iid, "detect")
+                return
             if peak <= baseline * 1.5 and peak < 1000:
                 await self._think(iid, "detect",
-                    f"No clear anomaly (peak p95 {int(peak)}ms). Holding.", anomaly=False)
+                    f"No anomaly in this window — peak p95 {int(peak)}ms looks normal. "
+                    f"Nothing to resolve.",
+                    anomaly=False, held=True, no_data=False)
                 await self._set_stage(iid, "detect")
                 return
             await self._think(iid, "detect",
                 f"Anomaly confirmed: p95 reached {int(peak)}ms vs ~{int(baseline)}ms baseline"
                 + (f", onset around {onset}." if onset else "."),
                 anomaly=True, peak=peak, baseline=baseline, onset=onset)
+
+            # ---- Splunk AI Toolkit (official Splunk AI/ML) if installed ----
+            # DensityFunction outlier detection; non-fatal (fit errors if AITK
+            # isn't installed → soft-fail and we fall back to predict below).
+            aitk = await self.mcp.run_spl(
+                f"index={cfg.index} sourcetype={cfg.sourcetype} {svc}"
+                f"| fit DensityFunction {cfg.latency_field} threshold=0.005 "
+                f'| search "IsOutlier({cfg.latency_field})"=1 '
+                f"| stats count as outliers", e0, l0)
+            aitk_n = _num(aitk.rows[0].get("outliers")) if (aitk.ok and aitk.rows) else 0
+            if aitk_n > 0:
+                await self._spl(iid, "detect", "Splunk AI Toolkit — DensityFunction", aitk)
+                await self._think(iid, "detect",
+                    f"Splunk AI Toolkit (DensityFunction ML) flagged {int(aitk_n)} "
+                    f"anomalous {cfg.latency_field} events.", splunk_ai=True)
+
+            # ---- Splunk ML: predict-forecast the baseline (core, always-on) ----
+            ml = await self.mcp.run_spl(
+                f"index={cfg.index} sourcetype={cfg.sourcetype} {svc}"
+                f"| timechart span=1m p95({cfg.latency_field}) as p95 | predict p95",
+                e0, l0)
+            await self._spl(iid, "detect", "Splunk ML — predict (forecast baseline)", ml)
+            ml_base, ml_peak = _predict_shape(ml.rows)
+            if ml_base and ml_peak:
+                ratio = ml_peak / ml_base if ml_base else 0
+                await self._think(iid, "detect",
+                    f"Splunk ML (predict) modeled the expected p95 ≈ {int(ml_base)}ms; "
+                    f"observed peaked at {int(ml_peak)}ms (~{ratio:.0f}× the ML-forecast "
+                    f"baseline) — confirming the regression with Splunk's own ML.",
+                    splunk_ai=True, ml_baseline=ml_base, ml_peak=ml_peak)
+
+            # ---- Splunk AI Assistant (if the app is installed): NL → SPL ----
+            if self.mcp.has_generate_spl:
+                gen = await self.mcp.generate_spl(
+                    f"p95 of {cfg.latency_field} per minute for {service or cfg.sourcetype} "
+                    f"from index {cfg.index} sourcetype {cfg.sourcetype}")
+                if gen:
+                    await self.store.add_step(iid, "detect", "spl", {
+                        "label": "Splunk AI Assistant — generate_spl", "query": gen,
+                        "splunk_ai": True})
 
             # ---------- DIAGNOSE ----------
             await self._set_stage(iid, "diagnose")
@@ -144,28 +224,33 @@ class LoopEngine:
                     iid, matched_incident_id=match.get("source_incident_id"))
 
             else:
-                await self._think(iid, "diagnose",
-                    "No prior signature matches. Forming competing falsifiable hypotheses: "
-                    "(1) traffic surge, (2) payment provider, (3) DB pool exhaustion, "
-                    "(4) recent deploy. Testing each against real Splunk data.")
+                if cfg.curated:
+                    await self._think(iid, "diagnose",
+                        "No prior signature matches. Forming competing falsifiable hypotheses: "
+                        "(1) traffic surge, (2) payment provider, (3) DB pool exhaustion, "
+                        "(4) recent deploy. Testing each against real Splunk data.")
 
-                # Hypothesis 2: payment (red herring)
-                pay = await self.mcp.run_spl(
-                    f"index=ecommerce sourcetype=payment:transaction provider=stripe "
-                    f"| stats p95(latency_ms) as p95_latency_ms", e0, l0)
-                await self._spl(iid, "diagnose", "H2 payment provider latency", pay)
-                evidence["payment"] = pay.rows
+                    # Hypothesis 2: payment (red herring)
+                    pay = await self.mcp.run_spl(
+                        f"index={cfg.index} sourcetype=payment:transaction provider=stripe "
+                        f"| stats p95(latency_ms) as p95_latency_ms", e0, l0)
+                    await self._spl(iid, "diagnose", "H2 payment provider latency", pay)
+                    evidence["payment"] = pay.rows
 
-                # Hypothesis 3: DB pool (red herring)
-                pool = await self.mcp.run_spl(
-                    f"index=ecommerce sourcetype=db:pool "
-                    f"| stats max(active_connections) as active, sum(pool_timeouts) as pool_timeouts", e0, l0)
-                await self._spl(iid, "diagnose", "H3 DB connection pool", pool)
-                evidence["pool"] = pool.rows
+                    # Hypothesis 3: DB pool (red herring)
+                    pool = await self.mcp.run_spl(
+                        f"index={cfg.index} sourcetype=db:pool "
+                        f"| stats max(active_connections) as active, sum(pool_timeouts) as pool_timeouts", e0, l0)
+                    await self._spl(iid, "diagnose", "H3 DB connection pool", pool)
+                    evidence["pool"] = pool.rows
 
-                await self._think(iid, "diagnose",
-                    "Payment p95 and DB pool are within normal range — hypotheses 2 and 3 refuted. "
-                    "Strongest remaining signal: a recent deploy.")
+                    await self._think(iid, "diagnose",
+                        "Payment p95 and DB pool are within normal range — hypotheses 2 and 3 refuted. "
+                        "Strongest remaining signal: a recent deploy.")
+                else:
+                    await self._think(iid, "diagnose",
+                        "Forming hypotheses for this service. The strongest cross-domain signal "
+                        "is a recent deployment — correlating against the CI/CD stream next.")
 
             # CROSS-DOMAIN CORRELATION — its own loud step (always runs).
             await self.store.add_step(iid, "diagnose", "think", {
@@ -177,28 +262,55 @@ class LoopEngine:
                 "cross_domain": True,
             })
             deploy_res = await self.mcp.run_spl(
-                f"index=ecommerce sourcetype=deployment:event event_type=deployment service={service} "
+                f"index={cfg.index} sourcetype={cfg.deploy_sourcetype} {svc}"
                 f"| sort _time", e0, l0)
             await self._spl(iid, "diagnose", "Deployment events (CI/CD)", deploy_res)
             evidence["deployment"] = deploy_res.rows
 
-            # N+1 span confirmation
-            span_res = await self.mcp.run_spl(
-                f"index=ecommerce sourcetype=checkout:span span=db.query "
-                f"| stats count as span_count, avg(duration_ms) as avg_duration_ms by table", e0, l0)
-            await self._spl(iid, "diagnose", "DB query spans (N+1 check)", span_res)
-            evidence["spans"] = span_res.rows
+            # N+1 span confirmation (demo-specific signal)
+            span_res: SplQueryResult | None = None
+            if cfg.curated:
+                span_res = await self.mcp.run_spl(
+                    f"index={cfg.index} sourcetype=checkout:span span=db.query "
+                    f"| stats count as span_count, avg(duration_ms) as avg_duration_ms by table", e0, l0)
+                await self._spl(iid, "diagnose", "DB query spans (N+1 check)", span_res)
+                evidence["spans"] = span_res.rows
 
             deploy = _first(deploy_res.rows)
-            span = _first(span_res.rows)
-            build = deploy.get("build", "unknown")
-            prev = deploy.get("previous_build", "previous build")
-            table = span.get("table", "the affected table")
-            await self._think(iid, "diagnose",
-                f"Correlation locked: deploy {build} (prev {prev}) lands at the anomaly onset, "
-                f"and db.query spans show an N+1 fan-out on {table}. "
-                f"This is the cross-domain link no single-domain tool makes.",
-                cross_domain=True, build=build, table=table)
+            span = _first(span_res.rows) if span_res else {}
+            found_table = span.get("table") or ""  # only set when an N+1 was actually found
+            # Read the build/version under common field names so it works on
+            # arbitrary deploy logs, not just the demo's `build` field.
+            build = (deploy.get("build") or deploy.get("version") or deploy.get("release")
+                     or deploy.get("commit") or "")       # empty when no deploy correlated
+            prev = (deploy.get("previous_build") or deploy.get("previous_version")
+                    or "the previous build")
+            table = found_table or "the affected table"
+            if build:
+                corr = (
+                    f"Correlation locked: deploy {build} (prev {prev}) lands at the anomaly onset"
+                    + (f", and db.query spans show an N+1 fan-out on {found_table}." if found_table
+                       else ".")
+                    + " This is the cross-domain link no single-domain tool makes."
+                )
+            else:
+                corr = (
+                    "No deployment correlates with the onset in this window. "
+                    "Surfacing a rollback-first remediation and flagging recent changes to review."
+                )
+            await self._think(iid, "diagnose", corr,
+                cross_domain=True, build=build or "none", table=table)
+
+            # ---- Splunk AI Assistant (if installed): ask for a diagnosis ----
+            if self.mcp.has_ask:
+                ans = await self.mcp.ask_splunk_question(
+                    f"{service or cfg.sourcetype} p95 latency rose to ~{int(peak)}ms"
+                    + (f" right after deploy {build}" if build else "")
+                    + ". What is the most likely root cause and immediate fix?")
+                if ans:
+                    evidence["ai_assistant"] = ans
+                    await self._think(iid, "diagnose",
+                        f"Splunk AI Assistant: {ans[:400]}", splunk_ai=True)
 
             # Converge on root cause (grounded).
             diag = await diagnose(self.model, evidence)
@@ -210,10 +322,13 @@ class LoopEngine:
             # ---------- REMEDIATE (PROPOSE ONLY) ----------
             await self._set_stage(iid, "remediate")
             await self._think(iid, "remediate",
-                "Drafting the proposed remediation — rollback action + code-level N+1 fix as a "
-                "unified diff. PROPOSE ONLY: nothing is applied until a human approves.")
+                "Drafting the proposed remediation. PROPOSE ONLY: nothing is applied "
+                "until a human approves.")
             rem = await draft_remediation(self.model, diag["root_cause"], {
-                "table": table, "build": build, "previous_build": prev, "service": service,
+                # Empty table/build → the drafter proposes a rollback-only fix
+                # (no misleading code diff) for generic incidents.
+                "table": found_table, "build": build,
+                "previous_build": prev if build else "", "service": service,
             })
             await self.store.add_step(iid, "remediate", "action", {
                 "label": "proposed_remediation",
@@ -255,7 +370,8 @@ class LoopEngine:
                 logger.warning("approve ignored: incident %s not at gate", iid)
                 return
             service = incident["service"]
-            windows = self._windows(service)
+            cfg = self._config(iid, service)
+            svc = f"service={service} " if service else ""
             approved_at = datetime.now(timezone.utc)
 
             await self.store.update_incident(
@@ -277,10 +393,13 @@ class LoopEngine:
             await self._think(iid, "verify",
                 "Re-querying Splunk over the POST-FIX window to prove p95 returned to baseline. "
                 "Closure must be evidence-backed, not a status flip.")
-            ev, lv = windows["verify"]
+            if cfg.curated:
+                ev, lv = self._windows(service)["verify"]
+            else:
+                ev, lv = (cfg.earliest or "-24h", cfg.latest or "now")
             verify_q = (
-                f"index=ecommerce sourcetype=checkout:transaction service={service} "
-                f"| timechart span=1m p95(latency_ms) as p95_latency_ms"
+                f"index={cfg.index} sourcetype={cfg.sourcetype} {svc}"
+                f"| timechart span=1m p95({cfg.latency_field}) as p95_latency_ms"
             )
             # tag the query so the stub returns the recovered window
             post = await self.mcp.run_spl(verify_q + " | eval window=\"verify\"", ev, lv)
@@ -379,8 +498,38 @@ def _latency_shape(rows: list[dict[str, Any]]) -> tuple[float, float, str | None
     return peak, baseline, onset
 
 
+def _predict_shape(rows: list[dict[str, Any]]) -> tuple[float, float]:
+    """From Splunk `predict` output return (ml_baseline, observed_peak):
+    the ML-forecast baseline (min predicted value) and the observed peak p95."""
+    preds: list[float] = []
+    actuals: list[float] = []
+    for r in rows:
+        p = r.get("prediction(p95)")
+        a = r.get("p95")
+        try:
+            if p is not None and str(p) != "":
+                preds.append(float(p))
+        except (TypeError, ValueError):
+            pass
+        try:
+            if a is not None and str(a) != "":
+                actuals.append(float(a))
+        except (TypeError, ValueError):
+            pass
+    baseline = min(preds) if preds else 0.0
+    peak = max(actuals) if actuals else 0.0
+    return baseline, peak
+
+
 def _first(rows: list[dict[str, Any]]) -> dict[str, Any]:
     return rows[0] if rows and isinstance(rows[0], dict) else {}
+
+
+def _num(v: Any) -> float:
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def _parse_ts(ts: Any) -> datetime | None:

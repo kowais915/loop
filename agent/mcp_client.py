@@ -22,16 +22,19 @@ from config import Settings, get_settings
 logger = logging.getLogger("loop.mcp")
 
 # Tool-name candidates the Splunk MCP Server may expose for running SPL.
+# The official Splunk MCP Server app exposes `splunk_run_query`.
 _QUERY_TOOL_CANDIDATES = (
+    "splunk_run_query",
     "run_splunk_query",
     "run_oneshot_search",
     "run_search",
     "search",
 )
 
-# Optional tools we care about detecting (Splunk AI Assistant).
+# Optional tools we care about detecting (Splunk AI Assistant for SPL).
 _GENERATE_SPL_TOOL = "generate_spl"
 _EXPLAIN_SPL_TOOL = "explain_spl"
+_ASK_TOOL = "ask_splunk_question"
 
 Row = dict[str, Any]
 
@@ -62,18 +65,56 @@ class SplunkMCPClient:
     def __init__(self, settings: Settings | None = None) -> None:
         self.settings = settings or get_settings()
         self._tool_names: list[str] = []
+        self._tool_schemas: dict[str, Any] = {}
         self._query_tool: str | None = None
         self.has_generate_spl = False
         self.has_explain_spl = False
+        self.has_ask = False
         self._listed = False
 
     # -- connection helpers --------------------------------------------------
+    @property
+    def _conn(self):
+        from runtime import get_connection
+
+        return get_connection()
+
+    @property
+    def url(self) -> str:
+        return self._conn.splunk_mcp_url
+
     def _headers(self) -> dict[str, str]:
-        return {"Authorization": f"Bearer {self.settings.splunk_mcp_token}"}
+        return {"Authorization": f"Bearer {self._conn.splunk_mcp_token}"}
+
+    def _httpx_factory(self):
+        """httpx client factory for the MCP transport. Honors verify_tls so a
+        local self-signed Splunk (https://localhost:8089) connects."""
+        if self._conn.verify_tls:
+            return None  # use the SDK default factory
+
+        import httpx
+
+        def factory(headers=None, timeout=None, auth=None):
+            return httpx.AsyncClient(
+                headers=headers,
+                timeout=timeout if timeout is not None else httpx.Timeout(30.0),
+                auth=auth,
+                verify=False,  # self-signed localhost Splunk
+                follow_redirects=True,
+            )
+
+        return factory
 
     @property
     def live(self) -> bool:
-        return self.settings.has_splunk
+        return self._conn.live
+
+    def reset(self) -> None:
+        """Force a re-list of tools after the connection changes."""
+        self._listed = False
+        self._tool_names = []
+        self._tool_schemas = {}
+        self._query_tool = None
 
     async def list_tools(self) -> list[str]:
         """List MCP tools on startup; detect generate_spl / explain_spl. Logged."""
@@ -89,13 +130,21 @@ class SplunkMCPClient:
             from mcp import ClientSession
             from mcp.client.streamable_http import streamablehttp_client
 
+            kwargs = {"headers": self._headers()}
+            factory = self._httpx_factory()
+            if factory is not None:
+                kwargs["httpx_client_factory"] = factory
+
             async with streamablehttp_client(
-                self.settings.splunk_mcp_url, headers=self._headers()
+                self.url, **kwargs
             ) as (read, write, _):
                 async with ClientSession(read, write) as session:
                     await session.initialize()
                     listing = await session.list_tools()
                     self._tool_names = [t.name for t in listing.tools]
+                    self._tool_schemas = {
+                        t.name: getattr(t, "inputSchema", None) for t in listing.tools
+                    }
         except Exception as exc:  # never crash startup on MCP issues
             logger.error("Failed to list Splunk MCP tools: %s", exc)
             self._listed = True
@@ -104,6 +153,7 @@ class SplunkMCPClient:
         self._listed = True
         self.has_generate_spl = _GENERATE_SPL_TOOL in self._tool_names
         self.has_explain_spl = _EXPLAIN_SPL_TOOL in self._tool_names
+        self.has_ask = _ASK_TOOL in self._tool_names
         self._query_tool = next(
             (t for t in _QUERY_TOOL_CANDIDATES if t in self._tool_names), None
         )
@@ -139,8 +189,13 @@ class SplunkMCPClient:
             from mcp import ClientSession
             from mcp.client.streamable_http import streamablehttp_client
 
+            kwargs = {"headers": self._headers()}
+            factory = self._httpx_factory()
+            if factory is not None:
+                kwargs["httpx_client_factory"] = factory
+
             async with streamablehttp_client(
-                self.settings.splunk_mcp_url, headers=self._headers()
+                self.url, **kwargs
             ) as (read, write, _):
                 async with ClientSession(read, write) as session:
                     await session.initialize()
@@ -150,6 +205,7 @@ class SplunkMCPClient:
                             "query": _ensure_search_prefix(query),
                             "earliest_time": earliest,
                             "latest_time": latest,
+                            "row_limit": 1000,
                         },
                     )
             rows = _parse_tool_result(result)
@@ -162,10 +218,74 @@ class SplunkMCPClient:
                 rows=[], error=str(exc), query=query, earliest=earliest, latest=latest
             )
 
+    # -- Splunk AI Assistant for SPL (when the app exposes these MCP tools) ---
+    async def generate_spl(self, natural_language: str) -> str | None:
+        """Splunk AI capability: turn natural language into SPL via the AI
+        Assistant. Returns None if the tool isn't available / on error."""
+        return await self._call_nl_tool(_GENERATE_SPL_TOOL, natural_language)
+
+    async def ask_splunk_question(self, question: str) -> str | None:
+        """Splunk AI capability: ask the AI Assistant a question and return its
+        natural-language answer. None if unavailable / on error."""
+        return await self._call_nl_tool(_ASK_TOOL, question)
+
+    async def _call_nl_tool(self, tool: str, text: str) -> str | None:
+        if not self.live:
+            return None
+        if not self._listed:
+            await self.list_tools()
+        if tool not in self._tool_names:
+            return None
+        arg = _primary_string_arg(self._tool_schemas.get(tool))
+        try:
+            from mcp import ClientSession
+            from mcp.client.streamable_http import streamablehttp_client
+
+            kwargs = {"headers": self._headers()}
+            factory = self._httpx_factory()
+            if factory is not None:
+                kwargs["httpx_client_factory"] = factory
+            async with streamablehttp_client(self.url, **kwargs) as (read, write, _):
+                async with ClientSession(read, write) as session:
+                    await session.initialize()
+                    result = await session.call_tool(tool, {arg: text})
+            return _result_text(result) or None
+        except Exception as exc:
+            logger.error("AI Assistant tool %s failed: %s", tool, exc)
+            return None
+
 
 # ---------------------------------------------------------------------------
 # Result parsing
 # ---------------------------------------------------------------------------
+def _primary_string_arg(schema: Any) -> str:
+    """Pick the argument name to pass natural language to. Prefers the first
+    required string property, then common names, then the first string prop."""
+    if isinstance(schema, dict):
+        props = schema.get("properties") or {}
+        required = schema.get("required") or []
+        for name in required:
+            if isinstance(props.get(name), dict) and props[name].get("type") == "string":
+                return name
+        for cand in ("text", "query", "question", "natural_language", "prompt", "nl"):
+            if cand in props:
+                return cand
+        for name, spec in props.items():
+            if isinstance(spec, dict) and spec.get("type") == "string":
+                return name
+    return "text"
+
+
+def _result_text(result: Any) -> str:
+    parts: list[str] = []
+    for item in getattr(result, "content", None) or []:
+        t = getattr(item, "text", None)
+        if t:
+            parts.append(t)
+    return "\n".join(parts).strip()
+
+
+
 def _ensure_search_prefix(query: str) -> str:
     q = query.strip()
     if q.startswith("|") or q.lower().startswith("search "):
@@ -213,14 +333,32 @@ def _parse_tool_result(result: Any) -> list[Row]:
 
 def _coerce_rows(parsed: Any) -> list[Row]:
     if isinstance(parsed, list):
-        return [r for r in parsed if isinstance(r, dict)]
+        return [_merge_raw(r) for r in parsed if isinstance(r, dict)]
     if isinstance(parsed, dict):
         for key in ("results", "rows", "data", "events"):
             val = parsed.get(key)
             if isinstance(val, list):
-                return [r for r in val if isinstance(r, dict)]
-        return [parsed]
+                return [_merge_raw(r) for r in val if isinstance(r, dict)]
+        return [_merge_raw(parsed)]
     return []
+
+
+def _merge_raw(row: Row) -> Row:
+    """Splunk only auto-extracts some JSON fields (those referenced in the SPL).
+    For raw events the rest stay inside the `_raw` JSON string. Merge those back
+    so fields like build/previous_build/table are always available. Existing
+    top-level keys win over `_raw`."""
+    raw = row.get("_raw")
+    if isinstance(raw, str) and raw.lstrip().startswith("{"):
+        try:
+            inner = json.loads(raw)
+        except json.JSONDecodeError:
+            return row
+        if isinstance(inner, dict):
+            for k, v in inner.items():
+                if k not in row or row[k] in (None, ""):
+                    row[k] = v
+    return row
 
 
 # ---------------------------------------------------------------------------
@@ -229,6 +367,17 @@ def _coerce_rows(parsed: Any) -> list[Row]:
 # ---------------------------------------------------------------------------
 def _stub_rows(query: str) -> list[Row]:
     q = query.lower()
+
+    # Splunk ML — predict forecast (must precede the timechart branch).
+    if "predict" in q or "anomalydetection" in q:
+        wishlist = "wishlist" in q
+        base = 275 if wishlist else 280
+        spike = 3100 if wishlist else 3200
+        return [
+            {"_time": "2026-06-13T14:15:00", "p95": str(base + 1), "prediction(p95)": str(base)},
+            {"_time": "2026-06-13T14:30:00", "p95": str(spike), "prediction(p95)": str(base + 6)},
+            {"_time": "2026-06-13T14:46:00", "p95": str(base - 8), "prediction(p95)": str(base)},
+        ]
 
     # Deployment events (cross-domain correlation source).
     if "deployment:event" in q or "event_type=deployment" in q:

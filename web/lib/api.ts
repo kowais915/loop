@@ -11,11 +11,22 @@ async function jsonOrThrow<T>(res: Response): Promise<T> {
   return (await res.json()) as T;
 }
 
-export async function createIncident(input: {
+export interface CreateIncidentInput {
   symptom: string;
   service: string;
   title?: string;
-}): Promise<{ id: string }> {
+  // Optional generic "Analyze a service" overrides.
+  index?: string;
+  sourcetype?: string;
+  latency_field?: string;
+  deploy_sourcetype?: string;
+  earliest?: string;
+  latest?: string;
+}
+
+export async function createIncident(
+  input: CreateIncidentInput,
+): Promise<{ id: string }> {
   const res = await fetch(`${AGENT_URL}/incidents`, {
     method: "POST",
     headers: { "content-type": "application/json" },

@@ -4,7 +4,7 @@
 export function DiffView({ diff }: { diff: string }) {
   const lines = diff.replace(/\n$/, "").split("\n");
   return (
-    <pre className="font-mono text-[12px] leading-relaxed overflow-x-auto rounded-lg border border-zinc-800 bg-zinc-950/80">
+    <pre className="font-mono text-[12px] leading-relaxed overflow-x-auto rounded-lg bg-black/40">
       <code className="block">
         {lines.map((line, i) => {
           let cls = "text-zinc-400";
@@ -12,7 +12,7 @@ export function DiffView({ diff }: { diff: string }) {
           if (line.startsWith("+++") || line.startsWith("---")) {
             cls = "text-zinc-500";
           } else if (line.startsWith("@@")) {
-            cls = "text-cyan-400";
+            cls = "text-zinc-500";
           } else if (line.startsWith("+")) {
             cls = "text-emerald-300";
             bg = "bg-emerald-500/10";

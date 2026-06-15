@@ -19,16 +19,19 @@ import type { AgentStep } from "@/lib/types";
 
 function StepIcon({ step }: { step: AgentStep }) {
   const c = step.content;
-  if (c.gate) return <Hand className="h-3.5 w-3.5 text-amber-400" />;
-  if (c.cross_domain) return <Link2 className="h-3.5 w-3.5 text-purple-400" />;
-  if (c.matched) return <Zap className="h-3.5 w-3.5 text-pink-400" />;
-  if (c.learned) return <Sparkles className="h-3.5 w-3.5 text-pink-400" />;
+  // Palette: amber = gate, red = error, emerald = key/success moments,
+  // everything else neutral zinc.
+  if (c.gate) return <Hand className="h-3.5 w-3.5 text-emerald-300" />;
   if (c.error) return <AlertTriangle className="h-3.5 w-3.5 text-red-400" />;
+  if (c.splunk_ai) return <Sparkles className="h-3.5 w-3.5 text-emerald-400" />;
+  if (c.cross_domain) return <Link2 className="h-3.5 w-3.5 text-emerald-400" />;
+  if (c.matched) return <Zap className="h-3.5 w-3.5 text-emerald-400" />;
+  if (c.learned) return <Sparkles className="h-3.5 w-3.5 text-emerald-400" />;
   switch (step.kind) {
     case "spl":
-      return <Terminal className="h-3.5 w-3.5 text-cyan-400" />;
+      return <Terminal className="h-3.5 w-3.5 text-zinc-400" />;
     case "mcp_result":
-      return <Database className="h-3.5 w-3.5 text-sky-400" />;
+      return <Database className="h-3.5 w-3.5 text-zinc-400" />;
     case "verify":
       return <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" />;
     case "action":
@@ -46,7 +49,7 @@ function SplBlock({ step }: { step: AgentStep }) {
     <div className="mt-1">
       <button
         onClick={() => setOpen((v) => !v)}
-        className="flex items-center gap-1 text-[10px] text-cyan-400/80 hover:text-cyan-300"
+        className="flex items-center gap-1 text-[10px] text-zinc-500 hover:text-zinc-300"
       >
         <ChevronDown
           className={`h-3 w-3 transition-transform ${open ? "rotate-180" : ""}`}
@@ -54,7 +57,7 @@ function SplBlock({ step }: { step: AgentStep }) {
         Show SPL
       </button>
       {open && (
-        <pre className="mt-1 overflow-x-auto rounded-md border border-zinc-800 bg-black/60 p-2 font-mono text-[10.5px] text-cyan-200">
+        <pre className="mt-1 overflow-x-auto rounded-md bg-black/45 p-2 font-mono text-[10.5px] text-emerald-200/90">
           {q}
         </pre>
       )}
@@ -69,7 +72,7 @@ function ResultBlock({ step }: { step: AgentStep }) {
     <div className="mt-1">
       <button
         onClick={() => setOpen((v) => !v)}
-        className="flex items-center gap-1 text-[10px] text-sky-400/80 hover:text-sky-300"
+        className="flex items-center gap-1 text-[10px] text-zinc-500 hover:text-zinc-300"
       >
         <ChevronDown
           className={`h-3 w-3 transition-transform ${open ? "rotate-180" : ""}`}
@@ -77,7 +80,7 @@ function ResultBlock({ step }: { step: AgentStep }) {
         {row_count ?? 0} rows{used_stub ? " · sample" : ""}
       </button>
       {open && rows && rows.length > 0 && (
-        <pre className="mt-1 max-h-40 overflow-auto rounded-md border border-zinc-800 bg-black/60 p-2 font-mono text-[10.5px] text-zinc-300">
+        <pre className="mt-1 max-h-40 overflow-auto rounded-md bg-black/45 p-2 font-mono text-[10.5px] text-zinc-300">
           {JSON.stringify(rows, null, 2)}
         </pre>
       )}
@@ -85,18 +88,29 @@ function ResultBlock({ step }: { step: AgentStep }) {
   );
 }
 
-export function ReasoningTrace({ steps }: { steps: AgentStep[] }) {
+export function ReasoningTrace({
+  steps,
+  flush = false,
+}: {
+  steps: AgentStep[];
+  flush?: boolean;
+}) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  // Always keep the latest step in view as the trace streams.
   useEffect(() => {
-    scrollRef.current?.scrollTo({
-      top: scrollRef.current.scrollHeight,
-      behavior: "smooth",
-    });
-  }, [steps.length]);
+    const el = scrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [steps.length, steps]);
 
   return (
-    <div className="glass rounded-2xl flex flex-col h-full min-h-0">
-      <div className="flex items-center gap-2 border-b border-zinc-800 px-4 py-3">
+    <div
+      className={
+        flush
+          ? "flex h-full min-h-0 flex-col bg-white/[0.02]"
+          : "glass flex h-full min-h-0 flex-col rounded-2xl"
+      }
+    >
+      <div className="flex items-center gap-2 px-4 py-3">
         <Terminal className="h-4 w-4 text-emerald-400" />
         <h3 className="text-sm font-semibold text-zinc-200">Reasoning trace</h3>
         <span className="ml-auto text-[11px] text-zinc-500">
@@ -116,15 +130,13 @@ export function ReasoningTrace({ steps }: { steps: AgentStep[] }) {
         <AnimatePresence initial={false}>
           {steps.map((step) => {
             const c = step.content;
-            const highlight = c.cross_domain
-              ? "border-l-purple-500/60"
-              : c.gate
-                ? "border-l-amber-500/60"
-                : c.matched || c.learned
-                  ? "border-l-pink-500/60"
-                  : c.error
-                    ? "border-l-red-500/60"
-                    : "border-l-zinc-700/60";
+            const highlight = c.gate
+              ? "border-l-emerald-500/60"
+              : c.error
+                ? "border-l-red-500/60"
+                : c.cross_domain || c.matched || c.learned
+                  ? "border-l-emerald-500/50"
+                  : "border-l-white/10";
             return (
               <motion.div
                 key={step.id}
@@ -140,18 +152,21 @@ export function ReasoningTrace({ steps }: { steps: AgentStep[] }) {
                     <span className="text-[9px] uppercase tracking-wider text-zinc-600">
                       {step.stage}
                     </span>
+                    {c.splunk_ai && (
+                      <span className="ml-1.5 inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-1.5 py-0.5 text-[9px] font-semibold text-emerald-300 align-middle">
+                        <Sparkles className="h-2.5 w-2.5" /> Splunk AI
+                      </span>
+                    )}
                     {c.text && (
                       <p
                         className={`text-[12px] leading-snug ${
-                          c.cross_domain
-                            ? "text-purple-200"
-                            : c.gate
-                              ? "text-amber-200"
-                              : c.matched || c.learned
-                                ? "text-pink-200"
-                                : c.error
-                                  ? "text-red-300"
-                                  : "text-zinc-300"
+                          c.gate
+                            ? "text-emerald-200"
+                            : c.error
+                              ? "text-red-300"
+                              : c.cross_domain || c.matched || c.learned
+                                ? "text-emerald-200"
+                                : "text-zinc-300"
                         }`}
                       >
                         {c.text}

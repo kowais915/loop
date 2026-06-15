@@ -7,9 +7,11 @@ import type { AgentStep, Incident } from "@/lib/types";
 export function EvidenceCard({
   incident,
   steps,
+  bare = false,
 }: {
   incident: Incident;
   steps: AgentStep[];
+  bare?: boolean;
 }) {
   const rc = steps.find(
     (s) => s.kind === "action" && s.content.label === "root_cause",
@@ -20,9 +22,9 @@ export function EvidenceCard({
   if (!rootCause) return null;
 
   return (
-    <div className="glass rounded-2xl p-4">
+    <div className={bare ? "" : "glass rounded-2xl p-4"}>
       <div className="flex items-center gap-2">
-        <Crosshair className="h-4 w-4 text-purple-400" />
+        <Crosshair className="h-4 w-4 text-zinc-400" />
         <h3 className="text-sm font-semibold text-zinc-200">Root cause</h3>
         {rc?.confidence != null && (
           <span className="ml-auto rounded-full bg-zinc-800/80 px-2 py-0.5 text-[10px] text-zinc-400">
@@ -43,7 +45,7 @@ export function EvidenceCard({
           {evidence.map((e, i) => (
             <div
               key={i}
-              className="flex items-start gap-2 rounded-lg border border-zinc-800 bg-zinc-900/40 px-2.5 py-1.5"
+              className="flex items-start gap-2 rounded-lg subtle px-2.5 py-1.5"
             >
               <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-400" />
               <span className="text-[12px] text-zinc-300">{e}</span>

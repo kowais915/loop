@@ -25,22 +25,20 @@ function arcPath(startDeg: number, endDeg: number, r = R): string {
   return `M ${x1} ${y1} A ${r} ${r} 0 ${large} 1 ${x2} ${y2}`;
 }
 
-export function LoopRing({ stage }: { stage: Stage }) {
-  const { activeIndex, atGate, done, rejected } = stageProgress(stage);
-  const current = STAGE_META[RING_ORDER[Math.min(activeIndex, 4)]];
+export function LoopRing({ stage, idle = false }: { stage: Stage; idle?: boolean }) {
+  const progress = stageProgress(stage);
+  // In idle mode nothing is "reached" — the orb just breathes.
+  const activeIndex = idle ? -1 : progress.activeIndex;
+  const atGate = idle ? false : progress.atGate;
+  const done = idle ? false : progress.done;
+  const rejected = idle ? false : progress.rejected;
+  const current = STAGE_META[RING_ORDER[Math.min(Math.max(activeIndex, 0), 4)]];
 
   return (
     <div className="relative" style={{ width: SIZE, height: SIZE }}>
       <svg width={SIZE} height={SIZE} viewBox={`0 0 ${SIZE} ${SIZE}`}>
-        {/* track */}
-        <circle
-          cx={C}
-          cy={C}
-          r={R}
-          fill="none"
-          stroke="rgba(63,63,70,0.4)"
-          strokeWidth={2}
-        />
+        {/* faint full track */}
+        <circle cx={C} cy={C} r={R} fill="none" stroke="rgba(82,82,91,0.22)" strokeWidth={1.5} />
 
         {RING_ORDER.map((key, i) => {
           const meta = STAGE_META[key];
@@ -53,21 +51,27 @@ export function LoopRing({ stage }: { stage: Stage }) {
 
           return (
             <g key={key}>
-              {/* dim base */}
-              <path
+              {/* dim base — gently breathes in idle so the orb feels alive */}
+              <motion.path
                 d={arcPath(start, end)}
                 fill="none"
                 stroke={meta.color}
-                strokeWidth={6}
+                strokeWidth={idle ? 5 : 4.5}
                 strokeLinecap="round"
-                opacity={0.12}
+                animate={idle ? { opacity: [0.16, 0.38, 0.16] } : { opacity: 0.12 }}
+                transition={
+                  idle
+                    ? { duration: 3.2, repeat: Infinity, delay: i * 0.22, ease: "easeInOut" }
+                    : { duration: 0.3 }
+                }
+                style={idle ? { filter: `drop-shadow(0 0 5px ${meta.color}55)` } : undefined}
               />
               {/* lit overlay */}
               <motion.path
                 d={arcPath(start, end)}
                 fill="none"
                 stroke={meta.color}
-                strokeWidth={isGateArc ? 8 : 6}
+                strokeWidth={isGateArc ? 6.5 : 5}
                 strokeLinecap="round"
                 initial={{ pathLength: 0, opacity: 0 }}
                 animate={{
@@ -80,11 +84,7 @@ export function LoopRing({ stage }: { stage: Stage }) {
                     ? { duration: 1.5, repeat: Infinity }
                     : { duration: 0.4 },
                 }}
-                style={{
-                  filter: reached
-                    ? `drop-shadow(0 0 6px ${meta.color}aa)`
-                    : "none",
-                }}
+                style={{ filter: reached ? `drop-shadow(0 0 7px ${meta.color}aa)` : "none" }}
               />
             </g>
           );
@@ -97,19 +97,18 @@ export function LoopRing({ stage }: { stage: Stage }) {
           const [nx, ny] = polar(mid, R);
           const reached = done || i <= activeIndex;
           return (
-            <g key={`node-${key}`}>
-              <motion.circle
-                cx={nx}
-                cy={ny}
-                r={6}
-                fill={reached ? meta.color : "#18181b"}
-                stroke={meta.color}
-                strokeWidth={2}
-                initial={{ scale: 0.6 }}
-                animate={{ scale: reached ? 1 : 0.7, opacity: reached ? 1 : 0.4 }}
-                style={{ filter: reached ? `drop-shadow(0 0 5px ${meta.color})` : "none" }}
-              />
-            </g>
+            <motion.circle
+              key={`node-${key}`}
+              cx={nx}
+              cy={ny}
+              r={4.5}
+              fill={reached ? meta.color : "#0c0c0e"}
+              stroke={meta.color}
+              strokeWidth={1.5}
+              initial={{ scale: 0.6 }}
+              animate={{ scale: reached ? 1 : 0.7, opacity: reached ? 1 : 0.35 }}
+              style={{ filter: reached ? `drop-shadow(0 0 5px ${meta.color})` : "none" }}
+            />
           );
         })}
       </svg>
@@ -137,7 +136,20 @@ export function LoopRing({ stage }: { stage: Stage }) {
 
       {/* center */}
       <div className="absolute inset-0 flex flex-col items-center justify-center text-center px-12">
-        {done ? (
+        {idle ? (
+          <motion.div
+            className="flex flex-col items-center"
+            animate={{ opacity: [0.7, 1, 0.7] }}
+            transition={{ duration: 3, repeat: Infinity, ease: "easeInOut" }}
+          >
+            <div className="text-2xl font-bold tracking-tight text-zinc-100">
+              LOOP
+            </div>
+            <div className="mt-1 text-[11px] text-zinc-500">
+              the incident copilot
+            </div>
+          </motion.div>
+        ) : done ? (
           <motion.div
             initial={{ scale: 0.5, opacity: 0 }}
             animate={{ scale: 1, opacity: 1 }}

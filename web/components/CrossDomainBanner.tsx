@@ -1,7 +1,7 @@
 "use client";
 
 import { AnimatePresence, motion } from "framer-motion";
-import { Activity, ArrowLeftRight, GitCommitHorizontal } from "lucide-react";
+import { ArrowLeftRight } from "lucide-react";
 
 import type { AgentStep } from "@/lib/types";
 
@@ -20,57 +20,56 @@ export function CrossDomainBanner({ steps }: { steps: AgentStep[] }) {
   return (
     <AnimatePresence>
       <motion.div
-        initial={{ opacity: 0, scale: 0.97 }}
-        animate={{ opacity: 1, scale: 1 }}
-        className="relative overflow-hidden rounded-2xl border border-purple-400/30 bg-gradient-to-r from-sky-500/10 via-purple-500/10 to-amber-500/10 p-4"
+        initial={{ opacity: 0, y: 6 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="glass relative overflow-hidden rounded-2xl px-6 py-5"
       >
-        <div className="flex items-center justify-center gap-4">
-          <div className="flex items-center gap-2">
-            <div className="rounded-lg bg-sky-500/15 p-2">
-              <Activity className="h-5 w-5 text-sky-400" />
+        {/* faint emerald glow behind the link */}
+        <div
+          className="pointer-events-none absolute inset-0 opacity-60"
+          style={{
+            background:
+              "radial-gradient(40rem 8rem at 50% 0%, rgba(16,185,129,0.10), transparent 70%)",
+          }}
+        />
+        <div className="relative flex items-center justify-center gap-5 text-center">
+          <div>
+            <div className="text-[10px] uppercase tracking-[0.15em] text-zinc-500">
+              Observability
             </div>
-            <div className="text-left">
-              <div className="text-[10px] uppercase tracking-wider text-sky-300/80">
-                Observability
-              </div>
-              <div className="text-xs font-medium text-zinc-200">
-                Latency anomaly
-              </div>
+            <div className="mt-0.5 text-sm font-medium text-zinc-100">
+              Latency anomaly
             </div>
           </div>
 
           <motion.div
             animate={{ x: [-3, 3, -3] }}
             transition={{ duration: 1.8, repeat: Infinity }}
+            className="text-emerald-400"
           >
-            <ArrowLeftRight className="h-5 w-5 text-purple-300" />
+            <ArrowLeftRight className="h-5 w-5" />
           </motion.div>
 
-          <div className="flex items-center gap-2">
-            <div className="rounded-lg bg-amber-500/15 p-2">
-              <GitCommitHorizontal className="h-5 w-5 text-amber-400" />
+          <div>
+            <div className="text-[10px] uppercase tracking-[0.15em] text-zinc-500">
+              CI/CD · Platform
             </div>
-            <div className="text-left">
-              <div className="text-[10px] uppercase tracking-wider text-amber-300/80">
-                CI/CD · Platform
-              </div>
-              <div className="text-xs font-medium text-zinc-200">
-                {build ? `Deploy ${build}` : "Deployment event"}
-              </div>
+            <div className="mt-0.5 text-sm font-medium text-zinc-100">
+              {build ? `Deploy ${build}` : "Deployment event"}
             </div>
           </div>
         </div>
 
-        <p className="mt-3 text-center text-[12px] text-zinc-300">
-          <span className="font-semibold text-purple-200">
-            Cross-domain correlation:
+        <p className="relative mt-3 text-center text-[12px] leading-relaxed text-zinc-400">
+          <span className="font-semibold text-emerald-300">
+            Cross-domain correlation
           </span>{" "}
-          LOOP linked the latency spike to{" "}
-          {build ? <span className="text-amber-200">deploy {build}</span> : "a deploy"}
+          — LOOP linked the latency spike to{" "}
+          {build ? <span className="text-zinc-200">deploy {build}</span> : "a deploy"}
           {table ? (
             <>
               {" "}
-              and the <span className="text-sky-200">N+1 on {table}</span>
+              and the <span className="text-zinc-200">N+1 on {table}</span>
             </>
           ) : null}
           . No single-domain tool makes this connection.

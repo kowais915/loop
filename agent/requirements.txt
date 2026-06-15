@@ -1,13 +1,15 @@
 # LOOP agent — FastAPI brain
-fastapi==0.115.6
+# fastapi>=0.136 needed for compatibility with the starlette the mcp SDK pulls.
+fastapi==0.136.3
 uvicorn[standard]==0.34.0
-pydantic==2.10.4
+pydantic==2.13.4          # mcp 1.27 requires >=2.11
 pydantic-settings==2.7.1
 python-dotenv==1.0.1
 httpx==0.28.1
 
 # MCP client (streamable-HTTP transport to the Splunk MCP Server)
-mcp==1.2.0
+# Needs >=1.8 for mcp.client.streamable_http + httpx_client_factory.
+mcp==1.27.2
 
 # Supabase (state + realtime + pgvector)
 supabase==2.11.0

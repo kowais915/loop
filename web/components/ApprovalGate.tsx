@@ -11,6 +11,7 @@ import { DiffView } from "./DiffView";
 interface Props {
   incident: Incident;
   steps: AgentStep[];
+  bare?: boolean;
 }
 
 function findProposal(steps: AgentStep[]) {
@@ -23,7 +24,7 @@ function findRootCause(steps: AgentStep[]) {
     ?.content;
 }
 
-export function ApprovalGate({ incident, steps }: Props) {
+export function ApprovalGate({ incident, steps, bare = false }: Props) {
   const [busy, setBusy] = useState<"approve" | "reject" | null>(null);
   const open = incident.stage === "awaiting_approval";
 
@@ -59,18 +60,22 @@ export function ApprovalGate({ incident, steps }: Props) {
           initial={{ opacity: 0, y: 16, scale: 0.99 }}
           animate={{ opacity: 1, y: 0, scale: 1 }}
           exit={{ opacity: 0, y: -8 }}
-          className="glass-strong rounded-2xl p-5 ring-1 ring-amber-400/30 shadow-[0_0_40px_-12px_rgba(245,158,11,0.4)]"
+          className={
+            bare
+              ? "rounded-xl bg-emerald-500/[0.05] p-4"
+              : "glass-strong rounded-2xl p-5 ring-1 ring-emerald-400/30 shadow-[0_0_40px_-12px_rgba(16,185,129,0.35)]"
+          }
         >
           <div className="flex items-center gap-2">
             <motion.div
               animate={{ opacity: [0.6, 1, 0.6] }}
               transition={{ duration: 1.6, repeat: Infinity }}
-              className="rounded-lg bg-amber-500/15 p-1.5"
+              className="rounded-lg bg-emerald-500/15 p-1.5"
             >
-              <Hand className="h-5 w-5 text-amber-400" />
+              <Hand className="h-5 w-5 text-emerald-300" />
             </motion.div>
             <div>
-              <h3 className="text-sm font-semibold text-amber-200">
+              <h3 className="text-sm font-semibold text-emerald-200">
                 Human approval required
               </h3>
               <p className="text-[11px] text-zinc-400">
@@ -86,7 +91,7 @@ export function ApprovalGate({ incident, steps }: Props) {
           </div>
 
           {matched && (
-            <div className="mt-3 rounded-lg border border-pink-400/30 bg-pink-500/10 px-3 py-2 text-[12px] text-pink-200">
+            <div className="mt-3 rounded-lg bg-emerald-500/10 px-3 py-2 text-[12px] text-emerald-200 ring-1 ring-emerald-400/30">
               ⚡ Recognized pattern — fix pre-filled from a previously resolved
               incident. One click to resolve.
             </div>
@@ -101,8 +106,8 @@ export function ApprovalGate({ incident, steps }: Props) {
 
           {/* rollback action */}
           {rollback && (
-            <div className="mt-3 flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2">
-              <RotateCcw className="h-4 w-4 text-amber-400 shrink-0" />
+            <div className="mt-3 flex items-center gap-2 rounded-lg subtle px-3 py-2">
+              <RotateCcw className="h-4 w-4 text-emerald-300 shrink-0" />
               <span className="text-[12px] text-zinc-300">{rollback}</span>
             </div>
           )}
@@ -131,7 +136,7 @@ export function ApprovalGate({ incident, steps }: Props) {
             <button
               onClick={onReject}
               disabled={busy !== null}
-              className="flex items-center justify-center gap-2 rounded-xl border border-zinc-700 bg-zinc-900/60 px-4 py-3 text-sm font-semibold text-zinc-300 transition hover:border-red-500/60 hover:text-red-300 disabled:opacity-60"
+              className="flex items-center justify-center gap-2 rounded-xl subtle px-4 py-3 text-sm font-semibold text-zinc-300 transition hover:bg-rose-500/10 hover:text-rose-300 disabled:opacity-60"
             >
               <X className="h-4 w-4" />
               Reject
